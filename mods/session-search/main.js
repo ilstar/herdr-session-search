@@ -1,4 +1,4 @@
-// Search past agent sessions (Claude Code, Codex) by keyword and resume one.
+// Search past agent sessions (Claude Code, Codex, opencode) by keyword and resume one.
 // Opens as a popup (mod.open:session-search). Type to search every session on
 // this computer, whatever folder it ran in; Tab cycles the agent filter,
 // Shift+Tab limits it to the current space's repo. ↑/↓ to pick, Enter resumes
@@ -21,6 +21,7 @@ const PYTHON = "/usr/bin/python3";
 const AGENTS = {
   claude: { name: "Claude", icon: "icons/claude.svg", resume: (id) => ["claude", "--resume", id] },
   codex: { name: "Codex", icon: "icons/codex.svg", resume: (id) => ["codex", "resume", id] },
+  opencode: { name: "opencode", icon: "icons/opencode.svg", resume: (id) => ["opencode", "--session", id] },
 };
 const FILTERS = [null, ...Object.keys(AGENTS)];
 const ROW = 62;
@@ -76,7 +77,7 @@ export default class SessionSearch extends View {
     this.seq = 0;
     this.debounce = null;
     this.handle = cx.focus_handle();
-    this.input = InputState.new({ placeholder: "Search Claude and Codex sessions…" });
+    this.input = InputState.new({ placeholder: "Search Claude, Codex and opencode sessions…" });
     this.input.on("change", (_e, cx) => {
       this.query = this.input.value();
       this.schedule(cx, 140);

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Full-text index of past agent sessions (Claude Code, Codex) for the session-search mod.
+"""Full-text index of past agent sessions (Claude Code, Codex, opencode) for the session-search mod.
 
-  index.py search [--q TEXT] [--agent claude|codex] [--cwd DIR] [--limit N] [--budget SECONDS]
+  index.py search [--q TEXT] [--agent claude|codex|opencode] [--cwd DIR] [--limit N] [--budget SECONDS]
 
 Each call first brings the index up to date (only files that changed since the
 last call), spending at most --budget seconds, then searches it. Prints JSON:
@@ -15,6 +15,7 @@ and register it in SOURCES.
 """
 
 import argparse
+import fcntl
 import glob
 import json
 import os
@@ -194,7 +195,113 @@ def codex_load(sid, rollout, meta):
     return d
 
 
-SOURCES = {"claude": claude_sources, "codex": codex_sources}
+# ---------- opencode: ~/.local/share/opencode/opencode.db ----------
+# Newer builds keep sessions in session_v2 + session_message (parts inline in
+# the message's `content`); older ones in session + message + part.
+
+OPENCODE_TITLE_DEFAULT = re.compile(r"^(New session|Child session) - \d{4}-\d\d-\d\dT")
+
+# Sub-agent sessions have a parent; they're left out.
+OPENCODE_SESSIONS_V2 = (
+    "select s.id, s.directory, s.title, s.time_updated, s.time_archived,"
+    " (select max(m.time_updated) || ':' || count(*) from session_message m where m.session_id = s.id)"
+    " from session_v2 s where s.parent_id is null"
+)
+OPENCODE_SESSIONS_V1 = (
+    "select s.id, s.directory, s.title, s.time_updated, s.time_archived,"
+    " (select max(m.time_updated) || ':' || count(*) from message m where m.session_id = s.id)"
+    " from session s where s.parent_id is null"
+)
+
+
+def opencode_db():
+    root = os.environ.get("OPENCODE_DATA_DIR") or os.path.join(
+        os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "opencode")
+    path = os.path.join(root, "opencode.db")
+    return path if os.path.isfile(path) else None
+
+
+_opencode_con = None
+
+
+def opencode_connect(path):
+    global _opencode_con
+    if _opencode_con is None:
+        _opencode_con = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=2)
+    return _opencode_con
+
+
+def opencode_sources():
+    path = opencode_db()
+    if not path:
+        return
+    try:
+        con = opencode_connect(path)
+        tables = {r[0] for r in con.execute("select name from sqlite_master where type='table'")}
+        if "session_v2" in tables and "session_message" in tables:
+            v2, rows = True, con.execute(OPENCODE_SESSIONS_V2).fetchall()
+        elif "session" in tables and "message" in tables:
+            v2, rows = False, con.execute(OPENCODE_SESSIONS_V1).fetchall()
+        else:
+            return
+    except sqlite3.Error:
+        return
+    for sid, cwd, title, updated, archived, msig in rows:
+        meta = dict(cwd=cwd or "", title=title or "", updated=updated or 0, archived=bool(archived))
+        sig = "%s:%s:%s" % (updated, msig, bool(archived))
+        yield "opencode:" + sid, sig, lambda s=sid, m=meta, v=v2, p=path: opencode_load(p, s, m, v)
+
+
+def opencode_messages(con, sid, v2):
+    """Yields (role, [text, ...]) in order: only the person's and the agent's own words."""
+    if v2:
+        for kind, data in con.execute(
+                "select type, data from session_message where session_id=? and type in ('user','assistant')"
+                " order by seq", (sid,)):
+            o = json.loads(data)
+            if kind == "user":
+                yield "user", [o.get("text") or ""]
+            else:
+                yield "assistant", [c.get("text") or "" for c in o.get("content") or []
+                                    if isinstance(c, dict) and c.get("type") == "text"]
+        return
+    roles, order = {}, []
+    for mid, data in con.execute("select id, data from message where session_id=? order by time_created, id", (sid,)):
+        roles[mid] = json.loads(data).get("role")
+        order.append(mid)
+    texts_by = {}
+    for mid, data in con.execute("select message_id, data from part where session_id=? order by id", (sid,)):
+        p = json.loads(data)
+        if p.get("type") == "text" and not p.get("synthetic") and not p.get("ignored"):
+            texts_by.setdefault(mid, []).append(p.get("text") or "")
+    for mid in order:
+        if roles[mid] in ("user", "assistant") and mid in texts_by:
+            yield roles[mid], texts_by[mid]
+
+
+def opencode_load(path, sid, meta, v2):
+    d = Doc("opencode", sid)
+    d.cwd, d.updated = meta["cwd"], meta["updated"]
+    d.extra["archived"] = meta["archived"]
+    for role, parts in opencode_messages(opencode_connect(path), sid, v2):
+        for raw in parts:
+            text = clean(raw)
+            if not text or text.startswith(CONTEXT_PREFIXES):
+                continue
+            if role == "user":
+                d.messages += 1
+                d.first = d.first or text[:300]
+            d.add(text)
+    if not d.messages:
+        return None
+    title = meta["title"].strip()
+    if OPENCODE_TITLE_DEFAULT.match(title):
+        title = ""
+    d.title = title.split("\n")[0][:120] or d.first.split("\n")[0][:120]
+    return d
+
+
+SOURCES = {"claude": claude_sources, "codex": codex_sources, "opencode": opencode_sources}
 
 
 # ---------- index ----------
@@ -300,8 +407,14 @@ def main():
     ap.add_argument("--limit", type=int, default=60)
     ap.add_argument("--budget", type=float, default=6)
     a = ap.parse_args()
-    con = connect()
-    pending = refresh(con, a.budget) if a.budget > 0 else 0
+    os.makedirs(CACHE, exist_ok=True)
+    # The mod can start a second search while a first build is still running.
+    # One writer at a time: otherwise both create the schema, or both insert
+    # the same new session (UNIQUE sessions.key). Searching needs no lock.
+    with open(os.path.join(CACHE, "index.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        con = connect()
+        pending = refresh(con, a.budget) if a.budget > 0 else 0
     total = con.execute("select count(*) from sessions where messages > 0").fetchone()[0]
     try:
         results = search(con, a.q, a.agent, a.cwd, a.limit)
