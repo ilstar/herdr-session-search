@@ -1,0 +1,5 @@
+# Written by Herdr into every mod folder
+gpui-kit.d.ts
+jsconfig.json
+__pycache__/
+.DS_Store
