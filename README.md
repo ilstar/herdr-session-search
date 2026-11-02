@@ -1,6 +1,6 @@
 # Session Search for Herdr
 
-Search your past **Claude Code** and **Codex** sessions by keyword from inside the
+Search your past **Claude Code**, **Codex** and **opencode** sessions by keyword from inside the
 [Herdr](https://herdr.dev) desktop app, and resume one in a new pane with a single keypress.
 
 ![Session Search](preview.png)
@@ -44,7 +44,7 @@ Or ask the agent in your Herdr window: *"add the Herdr mod at github.com/ilstar/
 | ↑ / ↓, PageUp / PageDown | Pick a session |
 | Enter | Resume in a new pane beside the focused one |
 | Cmd+Enter | Resume in a new tab of the space working in that folder (or a new space) |
-| Tab | Cycle All / Claude / Codex |
+| Tab | Cycle All / Claude / Codex / opencode |
 | Shift+Tab | Only sessions in the current space's repo |
 | Esc | Close |
 
@@ -59,9 +59,10 @@ index in `~/.cache/herdr-session-search/index.db`:
 | --- | --- | --- |
 | Claude Code | `~/.claude/projects/<folder>/<session>.jsonl` (or `$CLAUDE_CONFIG_DIR`) | `claude --resume <id>` |
 | Codex | the `threads` table in `~/.codex/state_*.sqlite`, plus each thread's rollout file (or `$CODEX_HOME`) | `codex resume <id>` |
+| opencode | `~/.local/share/opencode/opencode.db` (or `$XDG_DATA_HOME/opencode`, `$OPENCODE_DATA_DIR`), opened read-only | `opencode --session <id>` |
 
 Only what you and the agent wrote is indexed. Injected context (system reminders, environment
-blocks, AGENTS.md), sub-agent sessions and Codex guardian reviews are left out. The index is only a
+blocks, AGENTS.md), sub-agent sessions (including opencode child sessions) and Codex guardian reviews are left out. The index is only a
 cache: delete the folder to rebuild it. Nothing leaves your machine. The mod makes no network requests.
 
 You can run the indexer by hand:
@@ -90,7 +91,8 @@ python3 mods/session-search/index.py search --q "login redirect" --agent claude 
 
 ```sh
 python3 dev/demo-data.py /tmp/demo
-CLAUDE_CONFIG_DIR=/tmp/demo/claude CODEX_HOME=/tmp/demo/codex HERDR_SESSION_SEARCH_CACHE=/tmp/demo/cache \
+CLAUDE_CONFIG_DIR=/tmp/demo/claude CODEX_HOME=/tmp/demo/codex OPENCODE_DATA_DIR=/tmp/demo/opencode \
+  HERDR_SESSION_SEARCH_CACHE=/tmp/demo/cache \
   python3 mods/session-search/index.py search --q login
 ```
 

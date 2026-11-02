@@ -1,6 +1,6 @@
 # Session Search
 
-A popup that searches every past Claude Code and Codex session on this computer by keyword and
+A popup that searches every past Claude Code, Codex and opencode session on this computer by keyword and
 resumes the picked one in a new pane, in the folder the session ran in. Sessions from every folder
 are searched. Each result says where it ran, and which Herdr space is already working there.
 
@@ -12,14 +12,14 @@ A popup at the top of the window, 760px wide, offset 40px, on `popover`, 18px pa
 
 1. **Header row.** "Search sessions" (15px, semibold, `foreground`) on the left. On the right are filter
    chips (22px tall, 11.5px, radius 6; the selected one on `selected` in `foreground`, the others `dim`):
-   All · Claude · Codex, a 1×14px `border` divider, then "Only <repo name>" (the current space's git root).
+   All · Claude · Codex · opencode, a 1×14px `border` divider, then "Only <repo name>" (the current space's git root).
 2. **Search box.** 36px tall, radius 9, 1px `accent` border on `background`. It has the shipped
    `mods/workspace-chrome/search.svg` icon (15px, `dim`), a text input (12.8px), and a spinning
    `mods/workspace-chrome/spinner.svg` (13px) while a search runs.
 3. **Results.** Up to 8 rows of 62px each, then scrolling. Each row (radius 7, `hover` when selected or
    hovered) has:
-   - the agent's icon (`icons/claude.svg` / `icons/codex.svg`, 18px, full color);
-   - line 1: the session title (`foreground`, truncated), "archived" for archived Codex threads, and the
+   - the agent's icon (`icons/claude.svg` / `icons/codex.svg` / `icons/opencode.svg`, 18px, full color);
+   - line 1: the session title (`foreground`, truncated), "archived" for archived Codex threads and opencode sessions, and the
      age on the right (`now`, `20m`, `3h`, `4d`, then a date) in 11px `dim`;
    - line 2: the folder with `~` for home, ` · ` and the git branch (omitted when `HEAD`), in 11.5px `muted`.
      A missing folder shows in `blocked` with "(folder gone)". A space badge (10.5px, `raised`, radius 4)
@@ -41,7 +41,7 @@ A popup at the top of the window, 760px wide, offset 40px, on `popover`, 18px pa
   When no pane is focused (a layout terminal block, say), it opens as a tab instead.
 - Cmd+Enter, or a Cmd+click: `tab.new {space, folder, argv, name}` in the matched space, else
   `space.new {folder, argv, tab: title}`.
-- Claude sessions whose folder is gone aren't opened. A warning toast says why. Codex sessions there
+- Claude sessions whose folder is gone aren't opened. A warning toast says why. Codex and opencode sessions there
   open in the home folder.
 - Esc closes it. Opening a session closes it too.
 - No agent statuses: it lists finished sessions, not live agents.
@@ -53,12 +53,14 @@ A popup at the top of the window, 760px wide, offset 40px, on `popover`, 18px pa
 - `main.js`: a `View` using `InputState`/`Input` from `gpui-base`. It calls `exec`, `spaces`, `panes`,
   `focused`, `run`, `theme`, `props`, `closeOverlay`, `home`, `appHome` and `notify` from `herdr`. An
   `AGENTS` table maps each agent to its name, icon and resume argv (`claude --resume <id>`,
-  `codex resume <id>`). Space matching: of the panes in this computer's spaces, ignoring panes at home,
+  `codex resume <id>`, `opencode --session <id>`). Space matching: of the panes in this computer's spaces, ignoring panes at home,
   the one whose cwd contains the session folder or sits inside it, longest path wins.
 - `index.py`, run as `/usr/bin/python3 index.py search --q … [--agent] [--cwd] --limit 80 --budget 8`. Each call:
   1. lists sessions with a change signature: Claude `~/.claude/projects/*/*.jsonl` (mtime and size);
      Codex rows of `threads` in the newest `~/.codex/state_*.sqlite`, opened read-only, skipping
      `source` values that start with `{` (sub-agents), with the rollout file's mtime and size plus `updated_at_ms`;
+     opencode sessions without a `parent_id` (child sessions are sub-agents) in `~/.local/share/opencode/opencode.db`,
+     opened read-only, with the session's `time_updated` plus its messages' latest `time_updated` and count;
   2. re-reads only changed sessions, within the time budget, newest first. It keeps user and assistant
      text, and strips `<system-reminder>`, `<environment_context>` and similar blocks;
   3. stores them in an FTS5 table (`title, body, cwd`, `unicode61 remove_diacritics 2`) at
@@ -81,6 +83,11 @@ A popup at the top of the window, 760px wide, offset 40px, on `popover`, 18px pa
   Archived rollouts may be `.jsonl.zst` (needs `zstd`).
 - A pane at the home folder contains every path. Ignore it when matching spaces.
 - `exec` has a 30s limit. Keep the indexing budget well under it, and let the mod call again.
+- opencode has two layouts in the same database. Newer builds use `session_v2` + `session_message`
+  (`type` user/assistant; user text in `data.text`, assistant text in `data.content[]` parts of type `text`).
+  Older ones use `session` + `message` + `part` (keep `text` parts that aren't `synthetic` or `ignored`).
+  Prefer v2 when it's there: it holds every v1 session too. Untitled sessions have a null or
+  `New session - <date>` title; use the first message instead.
 - Remote machines' sessions aren't searched.
 
 ## Done when
